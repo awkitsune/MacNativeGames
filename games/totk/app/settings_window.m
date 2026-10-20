@@ -1,5 +1,6 @@
 /* The launcher's settings window: hold Option while the app opens (or launch it with --settings, or TOTK_SETTINGS=1); it also
-   opens by itself after a start that failed on one of these settings or crashed within a minute (app/launcher.m).
+   opens by itself after a start that failed on one of these settings or crashed within a minute (app/launcher.m). The
+   game's Settings… (Command-comma) opens it in a save-only mode beside the running game (--settings-only).
    Each control edits one entry of the saved settings (app/launch_settings.h); choosing the game's default removes the entry,
    so a later change of a default in the runtime reaches the player. A setting the environment already gives (open --env)
    is shown but cannot be changed here: the environment wins at launch. Text is Chinese or English (TOTK_UI). */
@@ -24,6 +25,7 @@ static NSString *const kPicture = @"picture";   /* one control for TOTK_MFX_UPSC
 @property NSTextField *aspectText, *gainLabel, *note;
 @property NSButton *save, *once, *always;
 @property NSString *highlight;
+@property BOOL editOnly;
 @property LaunchChoice choice;
 @end
 
@@ -210,18 +212,21 @@ static NSString *const kPicture = @"picture";   /* one control for TOTK_MFX_UPSC
 
     self.note = [NSTextField wrappingLabelWithString:problem ?: @""]; self.note.textColor = NSColor.systemRedColor;
     self.note.preferredMaxLayoutWidth = 660; [self.note.widthAnchor constraintEqualToConstant:660].active = YES; self.note.hidden = !problem;
-    NSTextField *hint = [self help:UI("打开游戏时按住 Option（⌥）键可再次显示这个窗口。", "Hold Option (⌥) while opening the game to show this window again.")];
+    NSTextField *hint = [self help:self.editOnly ? UI("游戏正在运行：保存后，退出游戏（⌘Q）再重新打开，新设置才会生效。", "The game is running: after you save, quit it (⌘Q) and open it again for the new settings to apply.")
+                                                 : UI("打开游戏时按住 Option（⌥）键可再次显示这个窗口；游戏中按 ⌘, 也可以。", "Hold Option (⌥) while opening the game, or press ⌘, while playing, to show this window again.")];
     self.always = [NSButton checkboxWithTitle:UI("每次启动都显示这个窗口", "Show this window at every start") target:nil action:nil];
     NSButton *reset = [NSButton buttonWithTitle:UI("恢复默认", "Reset to defaults") target:self action:@selector(reset:)];
     reset.toolTip = UI("所有设置回到游戏的默认值（点“保存并启动”后才保存）。", "Every setting back to the game's default (saved only with Save and Launch).");
-    NSButton *quit = [NSButton buttonWithTitle:UI("退出", "Quit") target:self action:@selector(quit:)]; quit.keyEquivalent = @"\033";
+    NSButton *quit = [NSButton buttonWithTitle:self.editOnly ? UI("取消", "Cancel") : UI("退出", "Quit") target:self action:@selector(quit:)];
+    quit.keyEquivalent = @"\033";
     self.once = [NSButton buttonWithTitle:UI("仅本次启动", "Launch once") target:self action:@selector(launchOnce:)];
     self.once.toolTip = UI("用这些设置启动，但不保存。", "Start with these settings without saving them.");
-    self.save = [NSButton buttonWithTitle:UI("保存并启动", "Save and Launch") target:self action:@selector(saveAndLaunch:)];
+    self.save = [NSButton buttonWithTitle:self.editOnly ? UI("保存", "Save") : UI("保存并启动", "Save and Launch") target:self action:@selector(saveAndLaunch:)];
+    if (self.editOnly) self.save.toolTip = UI("保存后，退出游戏（⌘Q）再重新打开即可生效。", "Saved settings apply after you quit the game (⌘Q) and open it again.");
     self.save.keyEquivalent = @"\r";
     NSStackView *buttons = [NSStackView new];
     [buttons addView:reset inGravity:NSStackViewGravityLeading];
-    for (NSButton *b in @[quit, self.once, self.save]) [buttons addView:b inGravity:NSStackViewGravityTrailing];
+    for (NSButton *b in self.editOnly ? @[quit, self.save] : @[quit, self.once, self.save]) [buttons addView:b inGravity:NSStackViewGravityTrailing];
     [buttons.widthAnchor constraintEqualToConstant:660].active = YES;
     NSStackView *stack = [NSStackView stackViewWithViews:@[self.note, self.tabs, self.always, hint, buttons]];
     stack.orientation = NSUserInterfaceLayoutOrientationVertical; stack.alignment = NSLayoutAttributeLeading; stack.spacing = 12;
@@ -339,13 +344,13 @@ static void install_menu(void) {
 }
 
 LaunchChoice launch_settings_window(NSMutableDictionary<NSString *, NSString *> *values, NSSet<NSString *> *fromEnv,
-                                    NSString *problem, NSString *highlight, BOOL *showAlways) {
+                                    NSString *problem, NSString *highlight, BOOL *showAlways, BOOL editOnly) {
     [NSApplication sharedApplication];
     NSApp.activationPolicy = NSApplicationActivationPolicyRegular;
     install_menu();
     [NSApp finishLaunching];
     SettingsWindow *s = [SettingsWindow new];
-    s.values = values; s.env = fromEnv; s.highlight = highlight;
+    s.values = values; s.env = fromEnv; s.highlight = highlight; s.editOnly = editOnly;
     [s build:problem];
     s.always.state = *showAlways;
     [s load];

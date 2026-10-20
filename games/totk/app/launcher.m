@@ -166,6 +166,12 @@ static NSMutableDictionary<NSString *, NSString *> *saved_settings(void) {
     for (NSString *k in d) if ([k isKindOfClass:NSString.class] && [d[k] isKindOfClass:NSString.class]) out[k] = d[k];
     return out;
 }
+static void save_settings(NSDictionary<NSString *, NSString *> *values, BOOL showAlways) {
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    if (values.count) [d setObject:values forKey:kLaunchEnv]; else [d removeObjectForKey:kLaunchEnv];
+    if (showAlways) [d setBool:YES forKey:kShowSettings]; else [d removeObjectForKey:kShowSettings];
+    CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);   // written before the launcher execs the game or exits
+}
 typedef struct { __unsafe_unretained NSDictionary<NSString *, NSString *> *values; __unsafe_unretained NSSet<NSString *> *env; } ResolveCtx;
 static const char *resolve_saved(const char *name, void *ctx) { NSString *v = ((ResolveCtx *)ctx)->values[@(name)]; return v.UTF8String; }
 static int resolve_env(const char *name, void *ctx) { return [((ResolveCtx *)ctx)->env containsObject:@(name)]; }
@@ -208,11 +214,27 @@ int main(int argc, char **argv) {
         }
         /* Option held while the app opens (or --settings / TOTK_SETTINGS=1): the settings window. Read first, while the key
            is still down; the settings the environment already gives are noted before the launcher sets anything. */
-        BOOL fromGame = argc > 1 && !strcmp(argv[1], "--settings");   // also the game's Settings… (runtime/frontend.m)
-        BOOL wantSettings = (NSEvent.modifierFlags & NSEventModifierFlagOption) != 0 || fromGame;
+        BOOL wantSettings = (NSEvent.modifierFlags & NSEventModifierFlagOption) != 0, editOnly = NO;
+        for (int i = 1; i < argc; i++) {
+            if (!strcmp(argv[i], "--settings")) wantSettings = YES;
+            if (!strcmp(argv[i], "--settings-only")) editOnly = YES;   // the game's Settings… (runtime/frontend.m)
+        }
         { const char *e = getenv("TOTK_SETTINGS"); if (e && *e && strcmp(e, "0")) wantSettings = YES; }
         NSMutableSet<NSString *> *fromEnv = [NSMutableSet set];
         for (int i = 0; i < LAUNCH_SETTINGS; i++) if (getenv(launch_settings[i].name)) [fromEnv addObject:@(launch_settings[i].name)];
+        /* --settings-only: the game's Settings… while it runs. Only the window and the saved settings: no game, no slot, no
+           log; the player quits and reopens the game for them to apply. */
+        if (editOnly) {
+            NSMutableDictionary<NSString *, NSString *> *values = saved_settings();
+            NSString *savedUi = values[@"TOTK_UI_LANG"];
+            if (![fromEnv containsObject:@"TOTK_UI_LANG"] && savedUi && !launch_setting_check("TOTK_UI_LANG", savedUi.UTF8String))
+                setenv("TOTK_UI_LANG", savedUi.UTF8String, 1);
+            BOOL showAlways = [NSUserDefaults.standardUserDefaults boolForKey:kShowSettings];
+            if (launch_settings_window(values, fromEnv, nil, nil, &showAlways, YES) != LaunchSave) return 0;
+            save_settings(values, showAlways);
+            note(@(TOTK_UI("设置已保存。退出游戏（⌘Q）再重新打开后生效。", "Settings saved. Quit the game (⌘Q) and open it again for them to apply.")));
+            return 0;
+        }
         if (access(binary.fileSystemRepresentation, X_OK) != 0) {
             show_error(@"The game files are missing from this app. Build it again with build_app.py.");
             return 1;
@@ -232,8 +254,6 @@ int main(int argc, char **argv) {
             return 1;
         }
         pid_t running = running_game(slot);
-        /* --settings from the game's Settings…: the game is closing (saves finish first); wait for it, up to 30 s. */
-        for (int i = 0; fromGame && running && i < 120; i++) { usleep(250000); running = running_game(slot); }
         if (running) {
             [[NSRunningApplication runningApplicationWithProcessIdentifier:running] activateWithOptions:NSApplicationActivateAllWindows];
             return 0;
@@ -248,15 +268,10 @@ int main(int argc, char **argv) {
         NSString *problemSetting = nil, *problem = last_start_problem(log, slot, &problemSetting);
         BOOL showAlways = [NSUserDefaults.standardUserDefaults boolForKey:kShowSettings], once = NO;
         if (wantSettings || showAlways || problem) {
-            LaunchChoice choice = launch_settings_window(values, fromEnv, problem, problemSetting, &showAlways);
+            LaunchChoice choice = launch_settings_window(values, fromEnv, problem, problemSetting, &showAlways, NO);
             if (choice == LaunchQuit) return 0;
             once = choice == LaunchOnce;
-            if (choice == LaunchSave) {
-                NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
-                if (values.count) [d setObject:values forKey:kLaunchEnv]; else [d removeObjectForKey:kLaunchEnv];
-                if (showAlways) [d setBool:YES forKey:kShowSettings]; else [d removeObjectForKey:kShowSettings];
-                CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);   // written before the exec below
-            }
+            if (choice == LaunchSave) save_settings(values, showAlways);
         }
         LaunchValue resolved[LAUNCH_SETTINGS];
         ResolveCtx ctx = {values, fromEnv};

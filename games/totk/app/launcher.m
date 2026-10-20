@@ -172,6 +172,27 @@ static void save_settings(NSDictionary<NSString *, NSString *> *values, BOOL sho
     if (showAlways) [d setBool:YES forKey:kShowSettings]; else [d removeObjectForKey:kShowSettings];
     CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);   // written before the launcher execs the game or exits
 }
+/* One settings window at a time: while it is up, its launcher holds an exclusive lock on <data>/settings-window.lock, with
+   its pid inside (the lock goes with the process, or at the exec into the game). Another launcher that wants the window
+   (Command-comma again, Option again) brings that one to the front and returns NO. */
+static BOOL settings_window_free(NSString *data) {
+    static int fd = -1;
+    if (fd >= 0) return YES;
+    make_dir(data);
+    fd = open([data stringByAppendingPathComponent:@"settings-window.lock"].fileSystemRepresentation, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+    if (fd < 0) return YES;   // no lock file: show the window anyway
+    if (flock(fd, LOCK_EX | LOCK_NB) == 0) {
+        char pid[16]; int n = snprintf(pid, sizeof pid, "%d\n", getpid());
+        if (ftruncate(fd, 0) == 0) (void)!pwrite(fd, pid, (size_t)n, 0);
+        return YES;
+    }
+    char text[16] = {0}; (void)!pread(fd, text, sizeof text - 1, 0);
+    close(fd); fd = -1;
+    pid_t other = atoi(text);
+    NSRunningApplication *app = other > 0 ? [NSRunningApplication runningApplicationWithProcessIdentifier:other] : nil;
+    [app activateWithOptions:NSApplicationActivateAllWindows];
+    return NO;
+}
 typedef struct { __unsafe_unretained NSDictionary<NSString *, NSString *> *values; __unsafe_unretained NSSet<NSString *> *env; } ResolveCtx;
 static const char *resolve_saved(const char *name, void *ctx) { NSString *v = ((ResolveCtx *)ctx)->values[@(name)]; return v.UTF8String; }
 static int resolve_env(const char *name, void *ctx) { return [((ResolveCtx *)ctx)->env containsObject:@(name)]; }
@@ -225,6 +246,7 @@ int main(int argc, char **argv) {
         /* --settings-only: the game's Settings… while it runs. Only the window and the saved settings: no game, no slot, no
            log; the player quits and reopens the game for them to apply. */
         if (editOnly) {
+            if (!settings_window_free([NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/MacNativeGames/" GAME_FOLDER])) return 0;
             NSMutableDictionary<NSString *, NSString *> *values = saved_settings();
             NSString *savedUi = values[@"TOTK_UI_LANG"];
             if (![fromEnv containsObject:@"TOTK_UI_LANG"] && savedUi && !launch_setting_check("TOTK_UI_LANG", savedUi.UTF8String))
@@ -268,6 +290,7 @@ int main(int argc, char **argv) {
         NSString *problemSetting = nil, *problem = last_start_problem(log, slot, &problemSetting);
         BOOL showAlways = [NSUserDefaults.standardUserDefaults boolForKey:kShowSettings], once = NO;
         if (wantSettings || showAlways || problem) {
+            if (!settings_window_free(data)) return 0;   // already open: brought to the front
             LaunchChoice choice = launch_settings_window(values, fromEnv, problem, problemSetting, &showAlways, NO);
             if (choice == LaunchQuit) return 0;
             once = choice == LaunchOnce;

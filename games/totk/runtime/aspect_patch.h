@@ -11,7 +11,7 @@
    the instruction branches to a stub in main's text padding that runs it and, while a ratio sits on the data page after
    main (+56, 0 = off), puts that instead. The stub keeps its scratch register on the stack, so no liveness is assumed.
    Wider than 16:9 the vertical view stays and more is seen at the sides. Narrower (16:10), 1.4.3's two camera sites
-   also widen the vertical view so the sides stay as at 16:9 (Vert+, aspect_math.h; factor on the data page +60);
+   also widen the camera's fovy so the sides stay as at 16:9 (Vert+, aspect_math.h; factor on the data page +60);
    TOTK_ASPECT_VERT=0, and 1.2.1 (no room for those stubs), keep the vertical view and see less at the sides.
    The HUD, drawn into the same 16:9 canvas, is squeezed back by nvn_mtl.m (uw_ui_squeeze). Not adjusted yet: HUD
    markers that follow objects in the world and pixel-snapped positions (5 more routines TOTK-Ultrawide widens in 1.2.1)
@@ -77,10 +77,11 @@ int runtime_aspect_toggle(void) {
     return 1;
 }
 
-/* sites: instructions that leave the ratio in an s register (fdiv s<d>, ... or ldr s<d>, [x<n>, #imm]); the first ncam
-   are camera sites that get a Vert+ stub (ASPECT_VSTUB bytes each, from vert_off) when vert_off is not 0 and the
-   setFovy pattern is there. The other stubs go from stub_off, ASPECT_STUB bytes per site. Both areas are main's text
-   padding, checked to be zero and inside the last text page; data_off is the page the loader reserves after main. */
+/* sites: instructions that leave the ratio in an s register (fdiv s<d>, ... or ldr s<d>, [x<n>, #imm]), each with a
+   plain stub from stub_off (ASPECT_STUB bytes per site). The first ncam are camera sites: when vert_off is not 0 and
+   the inlined setFovy is there, their fovy load also gets a Vert+ stub (ASPECT_VSTUB bytes each, from vert_off). Both
+   areas are main's text padding, checked to be zero and inside the last text page; data_off is the page the loader
+   reserves after main. */
 static inline void aspect_install(Module *m, const char *version, const uint64_t *sites, unsigned nsite, unsigned ncam,
                                   uint64_t stub_off, uint64_t vert_off, uint64_t data_off) {
 #if TARGET_OS_IPHONE
@@ -88,29 +89,43 @@ static inline void aspect_install(Module *m, const char *version, const uint64_t
 #else
     double req = aspect_requested();
     const char *ve = getenv("TOTK_ASPECT_VERT"); int vert = vert_off && !(ve && !strcmp(ve, "0"));
+    void *tanf_at = vert ? runtime_symbol("tanf") : NULL, *atanf_at = vert ? runtime_symbol("atanf") : NULL;
+    if (vert && (!tanf_at || !atanf_at)) { fprintf(stderr, "[totk] aspect patch: the game's tanf / atanf not found, no Vert+\n"); vert = 0; }
     uint64_t page_end = (m->text_end + 0x3fff) & ~0x3fffULL;
     if (stub_off < m->text_end || stub_off + ASPECT_STUB * nsite > page_end) runtime_fail("aspect patch: no room in main's text padding");
     if (vert && (vert_off < m->text_end || vert_off + ASPECT_VSTUB * ncam > page_end)) runtime_fail("aspect patch: no room for the Vert+ stubs");
-    if (data_off + ASPECT_VERT_SLOT + 4 > m->size) runtime_fail("aspect patch: no data page after main");
+    if (data_off + ASPECT_ATANF_SLOT + 8 > m->size) runtime_fail("aspect patch: no data page after main");
     for (unsigned i = 0; i < ASPECT_STUB * nsite; i++) if (m->base[stub_off + i]) runtime_fail("aspect patch: text padding in use");
     for (unsigned i = 0; vert && i < ASPECT_VSTUB * ncam; i++) if (m->base[vert_off + i]) runtime_fail("aspect patch: text padding for Vert+ in use");
     unsigned nvert = 0;
     for (unsigned i = 0; i < nsite; i++) {
         uint32_t ins; memcpy(&ins, m->base + sites[i], 4);
         if (!aspect_site_ok(ins)) runtime_fail("aspect patch: the camera code does not match this game version");
-        int p = -1;
-        if (vert && i < ncam) {
-            uint32_t around[8]; memcpy(around, m->base + sites[i] - 16, sizeof around);
-            if ((p = aspect_vert_reg(around)) < 0) fprintf(stderr, "[totk] aspect patch: camera site +%#llx is not the expected setFovy, no Vert+ there\n", (unsigned long long)sites[i]);
-        }
-        uint64_t s = p >= 0 ? vert_off + ASPECT_VSTUB * i : stub_off + ASPECT_STUB * i;
-        uint32_t code[32] = {0};
-        const char *err = p >= 0 ? aspect_vstub(ins, (unsigned)p, s, sites[i], data_off, code) : aspect_stub(ins, s, sites[i], data_off, code);
+        uint32_t code[74] = {0};
+        uint64_t s = stub_off + ASPECT_STUB * i;
+        const char *err = aspect_stub(ins, s, sites[i], data_off, code);
         uint32_t jump = aspect_b(sites[i], s);
         if (err || !jump) runtime_fail(err ? err : "aspect patch: branch out of range");
-        memcpy(m->base + s, code, p >= 0 ? ASPECT_VSTUB : ASPECT_STUB);
+        if (vert && i < ncam) {   /* Vert+: the fovy load before it, found from the projection register */
+            uint32_t around[8], before[16]; memcpy(around, m->base + sites[i] - 16, sizeof around); memcpy(before, m->base + sites[i] - 64, sizeof before);
+            int p = aspect_vert_reg(around), j = p >= 0 ? aspect_fovy_at(before, (unsigned)p) : -1;
+            if (j < 0) fprintf(stderr, "[totk] aspect patch: camera site +%#llx is not the expected setFovy, no Vert+ there\n", (unsigned long long)sites[i]);
+            else {
+                uint64_t fs = sites[i] - 64 + 4 * (uint64_t)j, vs = vert_off + ASPECT_VSTUB * i;
+                uint32_t vcode[74], vjump = aspect_b(fs, vs);
+                const char *verr = aspect_vstub(before[j], vs, fs, data_off, vcode);
+                if (verr || !vjump) runtime_fail(verr ? verr : "aspect patch: branch out of range");
+                memcpy(m->base + vs, vcode, sizeof vcode);
+                memcpy(m->base + fs, &vjump, 4);
+                nvert++;
+            }
+        }
+        memcpy(m->base + s, code, ASPECT_STUB);
         memcpy(m->base + sites[i], &jump, 4);
-        nvert += p >= 0;
+    }
+    if (nvert) {
+        uint64_t fa = (uint64_t)(uintptr_t)tanf_at, fb = (uint64_t)(uintptr_t)atanf_at;
+        memcpy(m->base + data_off + ASPECT_TANF_SLOT, &fa, 8); memcpy(m->base + data_off + ASPECT_ATANF_SLOT, &fb, 8);
     }
     g_aspect_slot = (_Atomic(uint32_t) *)(void *)(m->base + data_off + ASPECT_DATA_SLOT);
     if (nvert) g_aspect_vert = (_Atomic(uint32_t) *)(void *)(m->base + data_off + ASPECT_VERT_SLOT);

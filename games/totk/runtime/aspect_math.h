@@ -1,11 +1,13 @@
 /* The arithmetic and machine code of aspect_patch.h, without the runtime, so tests/test_aspect.c can check it: TOTK_ASPECT
    parsing, the Vert+ factor for ratios below 16:9, and the stubs put behind the camera sites.
    Vert+: the game keeps its vertical field of view and the aspect ratio decides how much is seen at the sides, so a ratio
-   below 16:9 (a MacBook's 16:10) would show less at the sides. sead's perspective projection keeps fovy (+0xa0) and the
-   sine, cosine and tangent of half of it (+0xa4, +0xa8, +0xac) beside the aspect ratio (+0xb0); 1.4.3 inlines its
-   setFovy in both camera sites, just before the aspect ratio that the sites patch. Multiplying the tangent by
-   (16/9) / ratio (and the sine and cosine to match) keeps the 16:9 horizontal view and adds view above and below. fovy
-   itself is left at the game's value. */
+   below 16:9 (a MacBook's 16:10) would show less at the sides. 1.4.3 inlines sead's PerspectiveProjection::setFovy in
+   both camera sites: the camera's fovy is loaded, stored at +0xa0, and the sine, cosine and tangent of half of it go to
+   +0xa4, +0xa8 and +0xac, just before the aspect ratio (+0xb0) that the sites patch. The Vert+ stub sits on that fovy
+   load and widens it to 2 atan(k tan(fovy / 2)), k = (16/9) / ratio, with the game's own tanf and atanf, so the 16:9
+   horizontal view stays, more is seen above and below, and every value sead derives (fovy, sine, cosine, tangent) agrees.
+   (Changing only the tangent, sine and cosine, as a first version did, left fovy at +0xa0 at the game's value; the sun
+   lighting reads it and lit the ground in the wrong places.) */
 #pragma once
 #include <stdint.h>
 #include <stdio.h>
@@ -14,8 +16,10 @@
 #define ASPECT_GAME (16.0 / 9.0)
 #define ASPECT_DATA_SLOT 56   /* the ratio's float on the data page after main; 0.0 = the game's own */
 #define ASPECT_VERT_SLOT 60   /* the Vert+ factor beside it; 0.0 = none */
+#define ASPECT_TANF_SLOT 64   /* the game's tanf and atanf (8 bytes each), for the Vert+ stubs */
+#define ASPECT_ATANF_SLOT 72
 #define ASPECT_STUB 32        /* bytes per plain stub */
-#define ASPECT_VSTUB 128      /* bytes per Vert+ stub */
+#define ASPECT_VSTUB 304      /* bytes per Vert+ stub (74 words, padded) */
 
 enum { ASPECT_BAD = -1, ASPECT_DISPLAY = -2 };
 
@@ -86,6 +90,17 @@ static inline int aspect_vert_reg(const uint32_t words[8]) {
     return -1;
 }
 
+/* The camera's fovy load for a camera site whose projection is x<p>: words[0..15] are site-64 .. site-4. 1.4.3:
+   ldr s<f>, [x<c>, #imm] (the camera's fovy), fmul (half of it), str s<f>, [x<p>, #0xa0]. The index of the load, or -1. */
+static inline int aspect_fovy_at(const uint32_t words[16], unsigned p) {
+    for (int j = 0; j + 2 < 16; j++) {
+        uint32_t f = words[j] & 31;
+        if ((words[j] & 0xffc00000) == 0xbd400000 && (words[j + 1] & 0xff20fc00) == 0x1e200800 && ((words[j + 1] >> 5) & 31) == f &&
+            aspect_str_s(words[j + 2], 0xa0) && (words[j + 2] & 31) == f && ((words[j + 2] >> 5) & 31) == p) return j;
+    }
+    return -1;
+}
+
 /* The plain stub (8 words) at offset s for the site's instruction ins: run it and, while a ratio sits in the data page's
    slot, put that instead. It keeps its scratch register on the stack, so no liveness is assumed. NULL or what failed. */
 static inline const char *aspect_stub(uint32_t ins, uint64_t s, uint64_t site, uint64_t data_off, uint32_t out[8]) {
@@ -105,49 +120,45 @@ static inline const char *aspect_stub(uint32_t ins, uint64_t s, uint64_t site, u
     return NULL;
 }
 
-/* The Vert+ stub (28 of its 32 words) for a camera site whose projection is in x<p>: the plain stub's ratio, then, while
-   the Vert+ factor k is set, tan' = k tan, cos' = 1 / sqrt(1 + tan'^2), sin' = tan' cos' over the half-angle values the
-   game has just stored. x10, x11 and s16-s18 are kept on the stack; flags are not touched (cbz, no compares). */
-static inline const char *aspect_vstub(uint32_t ins, unsigned p, uint64_t s, uint64_t site, uint64_t data_off, uint32_t out[32]) {
-    uint32_t adrp = aspect_adrp(10, s + 20, data_off), back = aspect_b(s + 27 * 4, site + 4);
-    if (!adrp) return "aspect patch: data page out of ADRP range";
+/* The Vert+ stub (74 words) at offset s for the fovy load ins of a camera site: run it and, while the Vert+ factor k is
+   set, widen s<f> to 2 atanf(k tanf(s<f> / 2)), calling the game's tanf and atanf (data page +64, +72). The game's
+   code runs on as if nothing had happened: x0-x17, x30, q0-q31 and the flags are kept on the stack (672 bytes), and
+   s<f> comes back from its slot there. */
+static inline const char *aspect_vstub(uint32_t ins, uint64_t s, uint64_t site, uint64_t data_off, uint32_t out[74]) {
+    uint32_t adrp1 = aspect_adrp(16, s + 29 * 4, data_off), adrp2 = aspect_adrp(16, s + 37 * 4, data_off), back = aspect_b(s + 73 * 4, site + 4);
+    if (!adrp1 || !adrp2) return "aspect patch: data page out of ADRP range";
     if (!back) return "aspect patch: branch out of range";
-    const uint32_t d = ins & 31, P = p << 5;
-#define LDS(t, off) (0xbd400000u | ((uint32_t)((off) / 4) << 10) | P | (t))
-#define STS(t, off) (0xbd000000u | ((uint32_t)((off) / 4) << 10) | P | (t))
-#define FOP(op, rd, rn, rm) ((op) | ((uint32_t)(rm) << 16) | ((uint32_t)(rn) << 5) | (rd))
-    const uint32_t stub[32] = {
-        ins,                                                    /*  0 the game's own ratio into s<d> */
-        0xd10083ff,                                             /*  1 sub sp, sp, #32 */
-        0xa9002fea,                                             /*  2 stp x10, x11, [sp] */
-        0x2d0247f0,                                             /*  3 stp s16, s17, [sp, #16] */
-        0xbd001bf2,                                             /*  4 str s18, [sp, #24] */
-        adrp,                                                   /*  5 adrp x10, <data page> */
-        0xb9400000u | ((ASPECT_DATA_SLOT / 4) << 10) | (10 << 5) | 11, /*  6 ldr w11, [x10, #ratio] */
-        0x34000000u | ((23 - 7) << 5) | 11,                     /*  7 cbz w11, 23: off */
-        0x1e270000u | (11 << 5) | d,                            /*  8 fmov s<d>, w11: the ratio */
-        0xb9400000u | ((ASPECT_VERT_SLOT / 4) << 10) | (10 << 5) | 11, /*  9 ldr w11, [x10, #k] */
-        0x34000000u | ((23 - 10) << 5) | 11,                    /* 10 cbz w11, 23: no Vert+ */
-        0x1e270000u | (11 << 5) | 16,                           /* 11 fmov s16, w11: k */
-        LDS(17, 0xac),                                          /* 12 ldr s17, [x<p>, #0xac]: tan */
-        FOP(0x1e200800u, 17, 17, 16),                           /* 13 fmul s17, s17, s16: tan' */
-        STS(17, 0xac),                                          /* 14 str s17, [x<p>, #0xac] */
-        FOP(0x1e200800u, 18, 17, 17),                           /* 15 fmul s18, s17, s17 */
-        0x1e2e1010,                                             /* 16 fmov s16, #1.0 */
-        FOP(0x1e202800u, 18, 18, 16),                           /* 17 fadd s18, s18, s16 */
-        0x1e21c000u | (18 << 5) | 18,                           /* 18 fsqrt s18, s18 */
-        FOP(0x1e201800u, 18, 16, 18),                           /* 19 fdiv s18, s16, s18: cos' */
-        STS(18, 0xa8),                                          /* 20 str s18, [x<p>, #0xa8] */
-        FOP(0x1e200800u, 17, 17, 18),                           /* 21 fmul s17, s17, s18: sin' */
-        STS(17, 0xa4),                                          /* 22 str s17, [x<p>, #0xa4] */
-        0xbd401bf2,                                             /* 23 ldr s18, [sp, #24] */
-        0x2d4247f0,                                             /* 24 ldp s16, s17, [sp, #16] */
-        0xa9402fea,                                             /* 25 ldp x10, x11, [sp] */
-        0x910083ff,                                             /* 26 add sp, sp, #32 */
-        back};                                                  /* 27 b <after the instruction> */
-#undef LDS
-#undef STS
-#undef FOP
-    memcpy(out, stub, sizeof stub);
+    const uint32_t QF = 160 + 16 * (ins & 31);   /* s<f>'s slot */
+    uint32_t w[74], n = 0;
+    w[n++] = ins;                                                            /*  0 the camera's fovy into s<f> */
+    w[n++] = 0xd10a83ff;                                                     /*  1 sub sp, sp, #672 */
+    for (uint32_t i = 0; i < 18; i += 2) w[n++] = 0xa9000000u | (i << 15) | ((i + 1) << 10) | (31 << 5) | i;   /* stp x<i>, x<i+1>, [sp, #8i] */
+    w[n++] = 0xd53b4210;                                                     /* 11 mrs x16, nzcv */
+    w[n++] = 0xa9000000u | (18u << 15) | (16 << 10) | (31 << 5) | 30;        /* 12 stp x30, x16, [sp, #144] */
+    for (uint32_t i = 0; i < 32; i += 2) w[n++] = 0xad000000u | (((160 + 16 * i) / 16) << 15) | ((i + 1) << 10) | (31 << 5) | i;   /* stp q<i>, q<i+1> */
+    w[n++] = adrp1;                                                          /* 29 adrp x16, <data page> */
+    w[n++] = 0xb9400000u | ((ASPECT_VERT_SLOT / 4) << 10) | (16 << 5) | 17;  /* 30 ldr w17, [x16, #k] */
+    w[n++] = 0x34000000u | ((45 - 31) << 5) | 17;                            /* 31 cbz w17, 45: no Vert+ */
+    w[n++] = 0xbd400000u | ((QF / 4) << 10) | (31 << 5) | 0;                 /* 32 ldr s0, [sp, #s<f>] */
+    w[n++] = 0x1e2c1001;                                                     /* 33 fmov s1, #0.5 */
+    w[n++] = 0x1e210800;                                                     /* 34 fmul s0, s0, s1 */
+    w[n++] = 0xf9400000u | ((ASPECT_TANF_SLOT / 8) << 10) | (16 << 5) | 16;  /* 35 ldr x16, [x16, #tanf] */
+    w[n++] = 0xd63f0200;                                                     /* 36 blr x16 */
+    w[n++] = adrp2;                                                          /* 37 adrp x16, <data page> */
+    w[n++] = 0xb9400000u | ((ASPECT_VERT_SLOT / 4) << 10) | (16 << 5) | 17;  /* 38 ldr w17, [x16, #k] */
+    w[n++] = 0x1e270221;                                                     /* 39 fmov s1, w17 */
+    w[n++] = 0x1e210800;                                                     /* 40 fmul s0, s0, s1 */
+    w[n++] = 0xf9400000u | ((ASPECT_ATANF_SLOT / 8) << 10) | (16 << 5) | 16; /* 41 ldr x16, [x16, #atanf] */
+    w[n++] = 0xd63f0200;                                                     /* 42 blr x16 */
+    w[n++] = 0x1e202800;                                                     /* 43 fadd s0, s0, s0 */
+    w[n++] = 0xbd000000u | ((QF / 4) << 10) | (31 << 5) | 0;                 /* 44 str s0, [sp, #s<f>]: the wider fovy */
+    for (uint32_t i = 0; i < 32; i += 2) w[n++] = 0xad400000u | (((160 + 16 * i) / 16) << 15) | ((i + 1) << 10) | (31 << 5) | i;   /* 45 ldp q<i>, q<i+1> */
+    w[n++] = 0xa9400000u | (18u << 15) | (16 << 10) | (31 << 5) | 30;        /* 61 ldp x30, x16, [sp, #144] */
+    w[n++] = 0xd51b4210;                                                     /* 62 msr nzcv, x16 */
+    for (uint32_t i = 0; i < 18; i += 2) w[n++] = 0xa9400000u | (i << 15) | ((i + 1) << 10) | (31 << 5) | i;   /* ldp x<i>, x<i+1> */
+    w[n++] = 0x910a83ff;                                                     /* 72 add sp, sp, #672 */
+    w[n++] = back;                                                           /* 73 b <after the load> */
+    if (n != 74) return "aspect patch: Vert+ stub size";
+    memcpy(out, w, sizeof w);
     return NULL;
 }

@@ -208,7 +208,8 @@ int main(int argc, char **argv) {
         }
         /* Option held while the app opens (or --settings / TOTK_SETTINGS=1): the settings window. Read first, while the key
            is still down; the settings the environment already gives are noted before the launcher sets anything. */
-        BOOL wantSettings = (NSEvent.modifierFlags & NSEventModifierFlagOption) != 0 || (argc > 1 && !strcmp(argv[1], "--settings"));
+        BOOL fromGame = argc > 1 && !strcmp(argv[1], "--settings");   // also the game's Settings… (runtime/frontend.m)
+        BOOL wantSettings = (NSEvent.modifierFlags & NSEventModifierFlagOption) != 0 || fromGame;
         { const char *e = getenv("TOTK_SETTINGS"); if (e && *e && strcmp(e, "0")) wantSettings = YES; }
         NSMutableSet<NSString *> *fromEnv = [NSMutableSet set];
         for (int i = 0; i < LAUNCH_SETTINGS; i++) if (getenv(launch_settings[i].name)) [fromEnv addObject:@(launch_settings[i].name)];
@@ -231,6 +232,8 @@ int main(int argc, char **argv) {
             return 1;
         }
         pid_t running = running_game(slot);
+        /* --settings from the game's Settings…: the game is closing (saves finish first); wait for it, up to 30 s. */
+        for (int i = 0; fromGame && running && i < 120; i++) { usleep(250000); running = running_game(slot); }
         if (running) {
             [[NSRunningApplication runningApplicationWithProcessIdentifier:running] activateWithOptions:NSApplicationActivateAllWindows];
             return 0;
@@ -307,6 +310,7 @@ int main(int argc, char **argv) {
         setenv("TOTK_SHADER_CACHE", cache.fileSystemRepresentation, 1);
         setenv("TOTK_GAME_SLOT_DIR", slot.fileSystemRepresentation, 1);
         setenv("TOTK_ROMFS_PROOF_DIR", data.fileSystemRepresentation, 1);   // the app bundle stays read-only
+        setenv("TOTK_APP_BUNDLE", NSBundle.mainBundle.bundlePath.fileSystemRepresentation, 1);   // the game's Settings… opens it again
         setenv("TOTK_SHARED_FONTS", "extracted/firmware/shared-fonts", 1);
         /* Player mods (runtime/romfs.c): <data>/mods/<version>/manifest.tsv, when present. */
         setenv("TOTK_ROMFS_MODS", [data stringByAppendingPathComponent:@"mods/" TOTK_GAME_DIR].fileSystemRepresentation, 0);

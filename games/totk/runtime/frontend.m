@@ -237,9 +237,34 @@ static TOTKWindowDelegate *windowDelegate;
 int runtime_front_window_visible(void){return atomic_load(&windowVisible);}
 void runtime_front_request_close(void){dispatch_async(dispatch_get_main_queue(), ^{[window performClose:nil];});}
 /* Use the window-close path, not terminate:, so Command-Q also waits for active saves. */
+/* Settings… (Command-comma): the launcher's settings window (app/settings_window.m). The game reads those settings when it
+   starts, so it closes as with Command-Q (saves finish first) and the app opens again with the window (open -n ... --settings:
+   the launcher waits for this game to end). TOTK_APP_BUNDLE (app/launcher.m): the app; unset in development runs, no item. */
+@interface TOTKSettingsItem:NSObject
+@end
+@implementation TOTKSettingsItem
+-(void)openSettings:(id)sender{(void)sender;
+ const char *app=getenv("TOTK_APP_BUNDLE");if(!app||!*app||!window)return;
+ NSAlert *a=[NSAlert new];a.messageText=@(TOTK_UI("打开启动设置？","Open the launch settings?"));
+ a.informativeText=@(TOTK_UI("这些设置在游戏启动时生效：游戏会像 ⌘Q 一样关闭（先等存档写完），然后打开设置窗口。点“保存并启动”会再次启动游戏。","These settings take effect when the game starts: the game closes as with ⌘Q (saves finish first) and the settings window opens. Save and Launch starts the game again."));
+ [a addButtonWithTitle:@(TOTK_UI("关闭并打开设置","Close and Open Settings"))];[a addButtonWithTitle:@(TOTK_UI("取消","Cancel"))];
+ NSString *bundle=@(app);
+ [a beginSheetModalForWindow:window completionHandler:^(NSModalResponse r){
+  if(r!=NSAlertFirstButtonReturn)return;
+  NSTask *t=[NSTask new];t.executableURL=[NSURL fileURLWithPath:@"/usr/bin/open"];t.arguments=@[@"-n",bundle,@"--args",@"--settings"];
+  NSError *err=nil;if(![t launchAndReturnError:&err]){fprintf(stderr,"[totk] Settings: could not open %s: %s\n",bundle.UTF8String,err.localizedDescription.UTF8String);return;}
+  fprintf(stderr,"[totk] Settings: closing the game; the app opens again with its settings window\n");
+  [window performClose:nil];}];
+}
+@end
+static TOTKSettingsItem *settingsItem;
 static void front_install_menu(void){
  NSMenu *menu=[NSMenu new],*appMenu=[NSMenu new];
  NSMenuItem *appItem=[NSMenuItem new];appItem.submenu=appMenu;[menu addItem:appItem];
+ {const char *app=getenv("TOTK_APP_BUNDLE");
+  if(app&&*app){settingsItem=[TOTKSettingsItem new];
+   NSMenuItem *s=[[NSMenuItem alloc] initWithTitle:@(TOTK_UI("设置…","Settings…")) action:@selector(openSettings:) keyEquivalent:@","];
+   s.keyEquivalentModifierMask=NSEventModifierFlagCommand;s.target=settingsItem;[appMenu addItem:s];[appMenu addItem:NSMenuItem.separatorItem];}}
  NSMenuItem *quit=[[NSMenuItem alloc] initWithTitle:@(TOTK_UI("退出 " GAME_NAME,"Quit " GAME_NAME)) action:@selector(performClose:) keyEquivalent:@"q"];
  quit.keyEquivalentModifierMask=NSEventModifierFlagCommand;quit.target=window;
  [appMenu addItem:quit];front_menubar_fps_add(menu);NSApp.mainMenu=menu;

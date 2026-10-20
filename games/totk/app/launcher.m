@@ -18,6 +18,8 @@
 #include "controller_map.h"
 #include "include/totk_ui_lang.h"
 #include "totk_shader_contrib.h"   // the shared shader list contribution and its reminder
+#include "launch_settings.h"       // the settings window's settings, checks and precedence
+#import "settings_window.h"
 
 static void show_error(NSString *detail) {
     NSAlert *alert = [NSAlert new];
@@ -156,6 +158,40 @@ static BOOL make_dir(NSString *path) {
     return [NSFileManager.defaultManager createDirectoryAtPath:path withIntermediateDirectories:YES attributes:nil error:nil];
 }
 
+/* The saved settings (app/launch_settings.h): this app's defaults, key LaunchEnv (name -> value); only string values. */
+static NSString *const kLaunchEnv = @"LaunchEnv", *const kShowSettings = @"ShowLaunchSettings";
+static NSMutableDictionary<NSString *, NSString *> *saved_settings(void) {
+    NSMutableDictionary *out = [NSMutableDictionary dictionary];
+    NSDictionary *d = [NSUserDefaults.standardUserDefaults dictionaryForKey:kLaunchEnv];
+    for (NSString *k in d) if ([k isKindOfClass:NSString.class] && [d[k] isKindOfClass:NSString.class]) out[k] = d[k];
+    return out;
+}
+typedef struct { __unsafe_unretained NSDictionary<NSString *, NSString *> *values; __unsafe_unretained NSSet<NSString *> *env; } ResolveCtx;
+static const char *resolve_saved(const char *name, void *ctx) { NSString *v = ((ResolveCtx *)ctx)->values[@(name)]; return v.UTF8String; }
+static int resolve_env(const char *name, void *ctx) { return [((ResolveCtx *)ctx)->env containsObject:@(name)]; }
+
+/* Why the settings window opens by itself, or nil: the last start failed on one of its settings (the previous log's
+   FAIL / FATAL line), or the last game crashed within a minute of starting (the game slot's history). */
+static NSString *last_start_problem(NSString *log, NSString *slot, NSString **setting) {
+    NSFileHandle *f = [NSFileHandle fileHandleForReadingAtPath:log];   // the last megabyte: a long game writes a long log
+    unsigned long long size = [f seekToEndOfFile];
+    [f seekToFileOffset:size > (1 << 20) ? size - (1 << 20) : 0];
+    NSMutableData *tail = [[f readDataToEndOfFile] mutableCopy]; [f closeFile];
+    [tail appendBytes:"" length:1];   // as a C string; the lines searched for are ASCII
+    char line[512] = "";
+    const LaunchSetting *s = f ? launch_failed_setting(tail.bytes, line, sizeof line) : NULL;
+    if (s) {
+        *setting = @(s->name);
+        return [NSString stringWithFormat:@(TOTK_UI("上次启动因为 %s 的值停止了：%s", "The last start stopped because of %s: %s")), s->name, line];
+    }
+    NSString *history = [NSString stringWithContentsOfFile:[slot stringByAppendingPathComponent:@"history.log"] encoding:NSUTF8StringEncoding error:nil];
+    NSDate *died = [NSFileManager.defaultManager attributesOfItemAtPath:log error:nil].fileModificationDate;
+    long ran = history && died ? launch_early_crash(history.UTF8String, (time_t)died.timeIntervalSince1970, 60) : -1;
+    if (ran < 0) return nil;
+    return [NSString stringWithFormat:@(TOTK_UI("上次游戏启动 %ld 秒后意外退出（%s）。可以在这里改回设置再试。", "The last game ended unexpectedly %ld s after it started (%s). You can change settings back here and try again.")),
+                                      ran, log.lastPathComponent.UTF8String];
+}
+
 int main(int argc, char **argv) {
     @autoreleasepool {
         NSString *root = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"totk"];
@@ -170,6 +206,12 @@ int main(int argc, char **argv) {
             printf("%s: game version %s\n", ok ? "ok" : "missing binary or version mismatch", TOTK_GAME_VERSION);
             return ok ? 0 : 1;
         }
+        /* Option held while the app opens (or --settings / TOTK_SETTINGS=1): the settings window. Read first, while the key
+           is still down; the settings the environment already gives are noted before the launcher sets anything. */
+        BOOL wantSettings = (NSEvent.modifierFlags & NSEventModifierFlagOption) != 0 || (argc > 1 && !strcmp(argv[1], "--settings"));
+        { const char *e = getenv("TOTK_SETTINGS"); if (e && *e && strcmp(e, "0")) wantSettings = YES; }
+        NSMutableSet<NSString *> *fromEnv = [NSMutableSet set];
+        for (int i = 0; i < LAUNCH_SETTINGS; i++) if (getenv(launch_settings[i].name)) [fromEnv addObject:@(launch_settings[i].name)];
         if (access(binary.fileSystemRepresentation, X_OK) != 0) {
             show_error(@"The game files are missing from this app. Build it again with build_app.py.");
             return 1;
@@ -192,6 +234,44 @@ int main(int argc, char **argv) {
         if (running) {
             [[NSRunningApplication runningApplicationWithProcessIdentifier:running] activateWithOptions:NSApplicationActivateAllWindows];
             return 0;
+        }
+        /* The game's settings (app/launch_settings.h): environment > saved > the game's default. The window opens when asked
+           for, when the player chose "show at every start", or when the last start failed (last_start_problem). */
+        NSString *log = [logs stringByAppendingPathComponent:@GAME_LOG ".log"];
+        NSMutableDictionary<NSString *, NSString *> *values = saved_settings();
+        NSString *savedUi = values[@"TOTK_UI_LANG"];   // the window's own language follows the saved launcher language
+        if (![fromEnv containsObject:@"TOTK_UI_LANG"] && savedUi && !launch_setting_check("TOTK_UI_LANG", savedUi.UTF8String))
+            setenv("TOTK_UI_LANG", savedUi.UTF8String, 1);
+        NSString *problemSetting = nil, *problem = last_start_problem(log, slot, &problemSetting);
+        BOOL showAlways = [NSUserDefaults.standardUserDefaults boolForKey:kShowSettings], once = NO;
+        if (wantSettings || showAlways || problem) {
+            LaunchChoice choice = launch_settings_window(values, fromEnv, problem, problemSetting, &showAlways);
+            if (choice == LaunchQuit) return 0;
+            once = choice == LaunchOnce;
+            if (choice == LaunchSave) {
+                NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+                if (values.count) [d setObject:values forKey:kLaunchEnv]; else [d removeObjectForKey:kLaunchEnv];
+                if (showAlways) [d setBool:YES forKey:kShowSettings]; else [d removeObjectForKey:kShowSettings];
+                CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);   // written before the exec below
+            }
+        }
+        LaunchValue resolved[LAUNCH_SETTINGS];
+        ResolveCtx ctx = {values, fromEnv};
+        launch_settings_resolve(resolve_saved, resolve_env, &ctx, resolved);
+        NSMutableArray<NSString *> *settingsLog = [NSMutableArray array];   // written to the game's log below
+        for (int i = 0; i < LAUNCH_SETTINGS; i++) {
+            const LaunchValue *r = &resolved[i];
+            if (r->source == LAUNCH_SAVED) {
+                setenv(r->name, r->value, 1);
+                [settingsLog addObject:[NSString stringWithFormat:@"%s=%s (%s)", r->name, r->value, once ? "this launch only" : "saved"]];
+            } else if (r->source == LAUNCH_ENV) {
+                [settingsLog addObject:[NSString stringWithFormat:@"%s=%s (environment%@)", r->name, getenv(r->name),
+                                                                  r->value ? [NSString stringWithFormat:@"; the saved %s is not used", r->value] : @""]];
+            } else {
+                unsetenv(r->name);
+                if (r->source == LAUNCH_IGNORED)
+                    [settingsLog addObject:[NSString stringWithFormat:@"ignored saved %s=\"%s\": %s", r->name, r->value, r->problem]];
+            }
         }
 #if defined(TOTK_GAME_V112) || defined(TOTK_GAME_V121) || defined(TOTK_GAME_V143)
         NSString *backup = [profile stringByAppendingFormat:@"-before-%s", TOTK_GAME_VERSION];
@@ -250,7 +330,6 @@ int main(int argc, char **argv) {
           FILE *cf = fopen(cmds.fileSystemRepresentation, "w"); if (cf) fclose(cf);
           setenv("TOTK_INPUT_FILE", cmds.fileSystemRepresentation, 1); }
 
-        NSString *log = [logs stringByAppendingPathComponent:@GAME_LOG ".log"];
         [NSFileManager.defaultManager removeItemAtPath:[logs stringByAppendingPathComponent:@GAME_LOG ".previous.log"] error:nil];
         [NSFileManager.defaultManager moveItemAtPath:log toPath:[logs stringByAppendingPathComponent:@GAME_LOG ".previous.log"] error:nil];
         FILE *lf = fopen(log.fileSystemRepresentation, "w");
@@ -259,6 +338,9 @@ int main(int argc, char **argv) {
             dup2(fileno(lf), STDERR_FILENO);
             fclose(lf);
         }
+        fprintf(stderr, "[launcher] settings (defaults %s %s; hold Option while opening the game to change them):%s\n",
+                NSBundle.mainBundle.bundleIdentifier.UTF8String ?: "?", kLaunchEnv.UTF8String, settingsLog.count ? "" : " the game's defaults");
+        for (NSString *line in settingsLog) fprintf(stderr, "[launcher]   %s\n", line.UTF8String);
         char *const arguments[] = {(char *)binary.fileSystemRepresentation, "rewritten/" TOTK_GAME_DIR, "boot", NULL};
         execv(arguments[0], arguments);
         fprintf(stderr, "[launcher] execv failed: %s\n", strerror(errno));

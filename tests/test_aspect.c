@@ -34,18 +34,20 @@ static void factors(void) {
     CHECK(near(aspect_vert_factor(1.6f), 10.0 / 9), "16:10: %f", aspect_vert_factor(1.6f));
     CHECK(near(aspect_vert_factor(4.0f / 3), 4.0 / 3), "4:3");
     double ux, uy;
-    aspect_ui_squeeze(1.6, 1920, 1080, &ux, &uy);
+    aspect_ui_squeeze(1.6, &ux, &uy);
     CHECK(ux == 1 && near(uy, 10.0 / 9), "16:10 flattens: %f %f", ux, uy);
-    aspect_ui_squeeze(21.0 / 9, 1920, 1080, &ux, &uy);
+    aspect_ui_squeeze(21.0 / 9, &ux, &uy);
     CHECK(near(ux, 21.0 / 16) && uy == 1, "21:9 narrows: %f %f", ux, uy);
-    aspect_ui_squeeze(32.0 / 9, 2560, 1440, &ux, &uy);
+    aspect_ui_squeeze(32.0 / 9, &ux, &uy);
     CHECK(near(ux, 2) && uy == 1, "32:9 narrows: %f %f", ux, uy);
-    aspect_ui_squeeze(0, 1920, 1080, &ux, &uy);
+    aspect_ui_squeeze(3440.0 / 1440, &ux, &uy);   /* the same on a canvas that is itself that wide (TOTK_OUTPUT_RES=3440x1440) */
+    CHECK(near(ux, 3440.0 / 1440 * 9 / 16) && uy == 1, "3440x1440: %f %f", ux, uy);
+    aspect_ui_squeeze(0, &ux, &uy);
     CHECK(ux == 1 && uy == 1, "off");
-    aspect_ui_squeeze(16.0 / 9, 1920, 1080, &ux, &uy);
+    aspect_ui_squeeze(16.0 / 9, &ux, &uy);
     CHECK(ux == 1 && uy == 1, "16:9");
     /* the HUD band at 16:10: a full-canvas viewport flattened about the centre covers 2560x1440 of a 2560x1600 window */
-    aspect_ui_squeeze(1.6, 1920, 1080, &ux, &uy);
+    aspect_ui_squeeze(1.6, &ux, &uy);
     double vy = 540 + (0 - 540) / uy, vh = 1080 / uy;
     CHECK(near(vy / 1080 * 1600, 80) && near(vh / 1080 * 1600, 1440), "band %f %f", vy / 1080 * 1600, vh / 1080 * 1600);
 }

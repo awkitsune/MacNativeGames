@@ -1,4 +1,4 @@
-/* Other picture shapes on the Mac: key 4 switches between the game's 16:9 and the window's own shape (a 21:9 or 32:9
+/* Other picture shapes on the Mac: key 4 switches between the game's 16:9 and fitting the window / display (a 21:9 or 32:9
    monitor, a MacBook's 16:10 in full screen below the notch). TOTK_ASPECT=21:9, 32:9, 16:10, 3440x1440 or 2.39 picks a
    fixed ratio instead and starts with it on; TOTK_ASPECT=display starts on with the window's shape. Not on iPhone / iPad.
    The game keeps drawing into its 16:9 canvas, but with the camera's aspect ratio set to the other one, so the picture
@@ -72,8 +72,8 @@ int runtime_aspect_toggle(void) {
     aspect_apply();
     float a = runtime_aspect_now();
     if (!on) fprintf(stderr, "[totk] key 4: aspect ratio 16:9 (the game's own)\n");
-    else if (a) fprintf(stderr, "[totk] key 4: aspect ratio %s %.4f\n", g_aspect_fixed ? "TOTK_ASPECT" : "of the window", a);
-    else fprintf(stderr, "[totk] key 4: the window is 16:9 already; the view follows its shape until key 4 again\n");
+    else if (a) fprintf(stderr, "[totk] key 4: aspect ratio %.4f (%s)\n", a, g_aspect_fixed ? "TOTK_ASPECT" : "fit to the window / display");
+    else fprintf(stderr, "[totk] key 4: fit to the window / display, which is 16:9 already; the view follows its shape until key 4 again\n");
     return 1;
 }
 
@@ -119,7 +119,7 @@ static inline void aspect_install(Module *m, const char *version, const uint64_t
     g_aspect_fixed = req > 0 ? (float)req : 0;
     atomic_store(&g_aspect_on, req != 0);
     aspect_apply();
-    char what[48]; if (g_aspect_fixed) snprintf(what, sizeof what, "%.4f (TOTK_ASPECT)", g_aspect_fixed); else snprintf(what, sizeof what, "the window's shape");
+    char what[48]; if (g_aspect_fixed) snprintf(what, sizeof what, "%.4f (TOTK_ASPECT)", g_aspect_fixed); else snprintf(what, sizeof what, "fit to the window / display");
     fprintf(stderr, "[totk] %s aspect ratio: key 4 switches 16:9 / %s, starts %s; %u site(s), %u with Vert+%s, stubs +%#llx\n",
             version, what, req ? "on" : "at 16:9", nsite, nvert, vert_off && !vert ? " (TOTK_ASPECT_VERT=0)" : "", (unsigned long long)stub_off);
 #endif

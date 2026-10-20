@@ -41,11 +41,12 @@ static inline float aspect_vert_factor(float a) {
     return a > 0 && a < ASPECT_GAME ? (float)(ASPECT_GAME / a) : 0;
 }
 
-/* The UI squeeze for a ratio a on a tw x th canvas (nvn_mtl.m): the canvas is stretched by a / (tw / th) horizontally
-   relative to vertically, so UI draws are narrowed by *ux (> 1 wider than the canvas) or flattened by *uy (> 1 below
-   it) about the canvas centre. Both 1 when a is 0 or within 0.1% of the canvas. */
-static inline void aspect_ui_squeeze(double a, double tw, double th, double *ux, double *uy) {
-    double f = a > 0 && tw > 0 && th > 0 ? a * th / tw : 1;
+/* The UI squeeze for a shown ratio a (nvn_mtl.m): the game lays its UI out for 16:9, so it comes out stretched by
+   a / (16/9) however wide the canvas is (a 16:9 canvas stretched at the present, or one as wide as the screen,
+   TOTK_OUTPUT_RES=3440x1440). UI draws are narrowed by *ux (> 1 wider than 16:9) or flattened by *uy (> 1 below it)
+   about the canvas centre. Both 1 when a is 0 or within 0.1% of 16:9. */
+static inline void aspect_ui_squeeze(double a, double *ux, double *uy) {
+    double f = a > 0 ? a / ASPECT_GAME : 1;
     *ux = f > 1.001 ? f : 1;
     *uy = f < 0.999 ? 1 / f : 1;
 }

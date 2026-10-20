@@ -6,8 +6,7 @@
    +0xa4, +0xa8 and +0xac, just before the aspect ratio (+0xb0) that the sites patch. The Vert+ stub sits on that fovy
    load and widens it to 2 atan(k tan(fovy / 2)), k = (16/9) / ratio, with the game's own tanf and atanf, so the 16:9
    horizontal view stays, more is seen above and below, and every value sead derives (fovy, sine, cosine, tangent) agrees.
-   Experimental and opt-in (TOTK_ASPECT_VERT=1): see the TODO(Vert+) in aspect_patch.h. A first version that changed
-   only the tangent, sine and cosine broke the sun lighting and shadows at 16:10. */
+   On by default below 16:9, TOTK_ASPECT_VERT=0 turns it off; known issues in the TODO(Vert+) in aspect_patch.h. */
 #pragma once
 #include <stdint.h>
 #include <stdio.h>
@@ -40,8 +39,8 @@ static inline float aspect_effective(double a) {
     return (float)a;
 }
 
-/* Vert+ is opt-in: TOTK_ASPECT_VERT=1 only (unset, 0 or anything else: the vertical view is kept). */
-static inline int aspect_vert_opted(const char *e) { return e && !strcmp(e, "1"); }
+/* Vert+ is on unless TOTK_ASPECT_VERT=0 (then the vertical view is kept and a little less is seen at the sides). */
+static inline int aspect_vert_wanted(const char *e) { return !(e && !strcmp(e, "0")); }
 
 /* The Vert+ factor for ratio a (the half-angle tangent is multiplied by it): (16/9) / a below 16:9, 0 (none) otherwise. */
 static inline float aspect_vert_factor(float a) {

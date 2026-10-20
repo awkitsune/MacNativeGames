@@ -10,9 +10,10 @@
    perspective projection (sead's +0xb0, found with a watchpoint on the copies) is patched where the value is produced:
    the instruction branches to a stub in main's text padding that runs it and, while a ratio sits on the data page after
    main (+56, 0 = off), puts that instead. The stub keeps its scratch register on the stack, so no liveness is assumed.
-   The vertical view stays: wider than 16:9 more is seen at the sides, narrower (16:10) a little less.
-   TOTK_ASPECT_VERT=1 (experimental, 1.4.3 only) instead widens the vertical view below 16:9 so the sides stay as at
-   16:9 (Vert+, aspect_math.h; factor on the data page +60). See the TODO at aspect_install.
+   Wider than 16:9 the vertical view stays and more is seen at the sides. Narrower (16:10), 1.4.3's two camera sites
+   widen the camera's fovy so the sides stay as at 16:9 (Vert+, aspect_math.h; factor on the data page +60);
+   TOTK_ASPECT_VERT=0, and 1.2.1 (no room for those stubs), keep the vertical view and see a little less at the sides.
+   Known issues: the TODO at aspect_install.
    The HUD, drawn into the same 16:9 canvas, is squeezed back by nvn_mtl.m (uw_ui_squeeze). Not adjusted yet: HUD
    markers that follow objects in the world and pixel-snapped positions (5 more routines TOTK-Ultrawide widens in 1.2.1)
    sit off. */
@@ -88,14 +89,17 @@ static inline void aspect_install(Module *m, const char *version, const uint64_t
     (void)m; (void)version; (void)sites; (void)nsite; (void)ncam; (void)stub_off; (void)vert_off; (void)data_off;
 #else
     double req = aspect_requested();
-    /* TODO(Vert+): off by default until someone finds every reader of the camera's field of view. The first Vert+
-       (only the projection's half-angle tangent, sine and cosine changed) broke the sun lighting and shadows on 1.4.3
-       at 16:10 (2940x1846, key 4 on, the plain camera was fine): the deferred lighting and shadow passes evidently
-       read camera values that stub did not change, and most sunlit ground lost its light. The stub now widens the
-       camera's fovy before setFovy derives the rest, which looked right at the one place it was compared, but nobody
-       has yet found those readers (other cameras, a copy of the fovy, cascades built elsewhere) and checked them;
-       until that is done Vert+ needs TOTK_ASPECT_VERT=1. */
-    int vert = vert_off && aspect_vert_opted(getenv("TOTK_ASPECT_VERT"));
+    /* TODO(Vert+), known issues:
+       - Some UI effects (the button-press effect, for one) sit in the wrong place below 16:9: they are drawn outside
+         the HUD quads nvn_mtl.m flattens (uw_ui_squeeze) and probably need the same flattening.
+       - Lighting: the first Vert+ changed only the projection's half-angle tangent, sine and cosine and left fovy
+         (+0xa0) at the game's value; on 1.4.3 at 16:10 (2940x1846, key 4 on) most sunlit ground lost its light and
+         shadows sat wrong. Widening the camera's fovy itself before setFovy derives the rest (this stub) fixed it in
+         an A/B at that spot, and the user saw correct sun lighting, shadows and horizon in full screen on a build
+         with main at 9e8a514. Which pass read the stale value was never found; anything else that reads the
+         camera's field of view (other cameras, a copy of fovy) has not been checked. TOTK_ASPECT_VERT=0 is the
+         fallback. */
+    int vert = vert_off && aspect_vert_wanted(getenv("TOTK_ASPECT_VERT"));
     void *tanf_at = vert ? runtime_symbol("tanf") : NULL, *atanf_at = vert ? runtime_symbol("atanf") : NULL;
     if (vert && (!tanf_at || !atanf_at)) { fprintf(stderr, "[totk] aspect patch: the game's tanf / atanf not found, no Vert+\n"); vert = 0; }
     uint64_t page_end = (m->text_end + 0x3fff) & ~0x3fffULL;
@@ -144,7 +148,7 @@ static inline void aspect_install(Module *m, const char *version, const uint64_t
     char what[48]; if (g_aspect_fixed) snprintf(what, sizeof what, "%.4f (TOTK_ASPECT)", g_aspect_fixed); else snprintf(what, sizeof what, "fit to the window / display");
     fprintf(stderr, "[totk] %s aspect ratio: key 4 switches 16:9 / %s, starts %s; %u site(s), %s, stubs +%#llx\n",
             version, what, req ? "on" : "at 16:9", nsite,
-            nvert ? "Vert+ on (TOTK_ASPECT_VERT=1, experimental: sun lighting and shadows may be wrong below 16:9)" : "vertical view kept below 16:9",
+            nvert ? "Vert+ below 16:9 (TOTK_ASPECT_VERT=0 keeps the vertical view; some UI effects sit off)" : "vertical view kept below 16:9",
             (unsigned long long)stub_off);
 #endif
 }

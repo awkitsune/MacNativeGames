@@ -1,5 +1,6 @@
 /* The arithmetic and machine code of aspect_patch.h, without the runtime, so tests/test_aspect.c can check it: TOTK_ASPECT
-   parsing, the Vert+ factor for ratios below 16:9, and the stubs put behind the camera sites.
+   parsing, key 4's steps, the Vert+ factor for ratios below 16:9, and the stubs put behind the camera sites. The UI
+   squeeze that goes with them is the graphics layer's (gfx/nvn/totk_ui_squeeze.h).
    Vert+: the game keeps its vertical field of view and the aspect ratio decides how much is seen at the sides, so a ratio
    below 16:9 (a MacBook's 16:10) would show less at the sides. 1.4.3 inlines sead's PerspectiveProjection::setFovy in
    both camera sites: the camera's fovy is loaded, stored at +0xa0, and the sine, cosine and tangent of half of it go to
@@ -65,16 +66,6 @@ static inline int aspect_vert_wanted(const char *e) { return e && !strcmp(e, "1"
 /* The Vert+ factor for ratio a (the half-angle tangent is multiplied by it): (16/9) / a below 16:9, 0 (none) otherwise. */
 static inline float aspect_vert_factor(float a) {
     return a > 0 && a < ASPECT_GAME ? (float)(ASPECT_GAME / a) : 0;
-}
-
-/* The UI squeeze for a shown ratio a (nvn_mtl.m): the game lays its UI out for 16:9, so it comes out stretched by
-   a / (16/9) however wide the canvas is (a 16:9 canvas stretched at the present, or one as wide as the screen,
-   TOTK_OUTPUT_RES=3440x1440). UI draws are narrowed by *ux (> 1 wider than 16:9) or flattened by *uy (> 1 below it)
-   about the canvas centre. Both 1 when a is 0 or within 0.1% of 16:9. */
-static inline void aspect_ui_squeeze(double a, double *ux, double *uy) {
-    double f = a > 0 ? a / ASPECT_GAME : 1;
-    *ux = f > 1.001 ? f : 1;
-    *uy = f < 0.999 ? 1 / f : 1;
 }
 
 /* b from -> to, or 0 when out of range. */

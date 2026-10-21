@@ -4328,7 +4328,7 @@ static int mfx_ui_vs(const char *key) {
    that scene (squeezed, Link turns into a black silhouette). The canvas is learned as for TOTK_MFX (canvas_learn,
    uw_note_present); g_uw_ui: this frame's UI has begun. */
 extern float runtime_aspect_now(void) __attribute__((weak_import));
-#include "../../../../runtime/aspect_math.h"
+#include "totk_ui_squeeze.h"
 static int g_uw_ui;
 _Atomic long g_uw_log;   // diagnostic "flag uw_log <frames>": log the canvas draws of that many frames
 _Atomic long g_draw_log;   // diagnostic "flag draw_log <frames>": log every draw and dispatch of that many frames (same [uw] lines)
@@ -4346,7 +4346,7 @@ static int uw_ui_vs(const char *vs) {
     for (size_t i = 0; i < sizeof more / sizeof *more; i++) if (!strncmp(vs, more[i], 8)) return 1;
     return 0;
 }
-/* The squeeze for this draw (aspect_math.h): *ux narrows it, *uy flattens it, both 1 when not UI or at 16:9. */
+/* The squeeze for this draw (totk_ui_squeeze.h): *ux narrows it, *uy flattens it, both 1 when not UI or at 16:9. */
 static void uw_ui_squeeze(const char *vs, const p_draw *dw, const p_draw_idx *di, NSUInteger tw, NSUInteger th, double *ux, double *uy) {
     *ux = *uy = 1;
     /* TOTK_UI_SQUEEZE=0: the UI layouts themselves are laid out for the wide canvas (scripts/ultrawide_layout.py, the
@@ -4358,7 +4358,7 @@ static void uw_ui_squeeze(const char *vs, const p_draw *dw, const p_draw_idx *di
        TOTK_OUTPUT_RES=3440x1440, nothing stretched at the present). Either way the UI comes out wider (or, below
        16:9, taller) by the shown ratio over 16:9; a ratio * th / tw only held for a 16:9 canvas. With key 4 off the
        picture is 16:9 again (stretched over a wide canvas, UI and all): nothing to squeeze. */
-    aspect_ui_squeeze(uw_ratio(), ux, uy);
+    totk_ui_squeeze(uw_ratio(), ux, uy);
 }
 /* TOTK_MFX: the scene is complete: end the pass (the draw that follows opens it again, loading the canvas, with the UI
    attachment) and copy the canvas into this frame's scene texture. */

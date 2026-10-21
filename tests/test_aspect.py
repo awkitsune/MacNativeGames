@@ -1,4 +1,5 @@
-"""TOTK_ASPECT parsing, Vert+ and the UI squeeze (games/totk/runtime/aspect_math.h) without the game."""
+"""TOTK_ASPECT parsing, key 4 and Vert+ (games/totk/runtime/aspect_math.h) and the UI squeeze
+(games/totk/third_party/d2r_gfx/gfx/nvn/totk_ui_squeeze.h) without the game."""
 from pathlib import Path
 import shutil
 import subprocess

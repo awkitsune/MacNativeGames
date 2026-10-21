@@ -1,7 +1,8 @@
 /* games/totk/runtime/aspect_math.h without the game: TOTK_ASPECT parsing, key 4's steps, the Vert+ factor, the UI
-   squeeze, the camera site patterns on sequences built here (no game code in the repository), and (on Apple silicon)
+   squeeze (gfx/nvn/totk_ui_squeeze.h), the camera site patterns on sequences built here (no game code in the repository), and (on Apple silicon)
    the stubs run for real against a fake projection. */
 #include "../games/totk/runtime/aspect_math.h"
+#include "../games/totk/third_party/d2r_gfx/gfx/nvn/totk_ui_squeeze.h"
 #include <math.h>
 #include <stdlib.h>
 #if defined(__aarch64__) && defined(__APPLE__)
@@ -37,20 +38,20 @@ static void factors(void) {
     CHECK(near(aspect_vert_factor(1.6f), 10.0 / 9), "16:10: %f", aspect_vert_factor(1.6f));
     CHECK(near(aspect_vert_factor(4.0f / 3), 4.0 / 3), "4:3");
     double ux, uy;
-    aspect_ui_squeeze(1.6, &ux, &uy);
+    totk_ui_squeeze(1.6, &ux, &uy);
     CHECK(ux == 1 && near(uy, 10.0 / 9), "16:10 flattens: %f %f", ux, uy);
-    aspect_ui_squeeze(21.0 / 9, &ux, &uy);
+    totk_ui_squeeze(21.0 / 9, &ux, &uy);
     CHECK(near(ux, 21.0 / 16) && uy == 1, "21:9 narrows: %f %f", ux, uy);
-    aspect_ui_squeeze(32.0 / 9, &ux, &uy);
+    totk_ui_squeeze(32.0 / 9, &ux, &uy);
     CHECK(near(ux, 2) && uy == 1, "32:9 narrows: %f %f", ux, uy);
-    aspect_ui_squeeze(3440.0 / 1440, &ux, &uy);   /* the same on a canvas that is itself that wide (TOTK_OUTPUT_RES=3440x1440) */
+    totk_ui_squeeze(3440.0 / 1440, &ux, &uy);   /* the same on a canvas that is itself that wide (TOTK_OUTPUT_RES=3440x1440) */
     CHECK(near(ux, 3440.0 / 1440 * 9 / 16) && uy == 1, "3440x1440: %f %f", ux, uy);
-    aspect_ui_squeeze(0, &ux, &uy);
+    totk_ui_squeeze(0, &ux, &uy);
     CHECK(ux == 1 && uy == 1, "off");
-    aspect_ui_squeeze(16.0 / 9, &ux, &uy);
+    totk_ui_squeeze(16.0 / 9, &ux, &uy);
     CHECK(ux == 1 && uy == 1, "16:9");
     /* the HUD band at 16:10: a full-canvas viewport flattened about the centre covers 2560x1440 of a 2560x1600 window */
-    aspect_ui_squeeze(1.6, &ux, &uy);
+    totk_ui_squeeze(1.6, &ux, &uy);
     double vy = 540 + (0 - 540) / uy, vh = 1080 / uy;
     CHECK(near(vy / 1080 * 1600, 80) && near(vh / 1080 * 1600, 1440), "band %f %f", vy / 1080 * 1600, vh / 1080 * 1600);
 }

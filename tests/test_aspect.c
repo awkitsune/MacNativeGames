@@ -30,8 +30,8 @@ static void factors(void) {
     CHECK(aspect_effective(1920.0 / 1088) == 0, "within 1%% of 16:9");
     CHECK(aspect_effective(0) == 0 && aspect_effective(ASPECT_DISPLAY) == 0, "unset");
     CHECK(near(aspect_effective(1.6), 1.6), "16:10 kept");
-    CHECK(aspect_vert_wanted(NULL) && aspect_vert_wanted("") && aspect_vert_wanted("1"), "Vert+ on by default");
-    CHECK(!aspect_vert_wanted("0"), "TOTK_ASPECT_VERT=0 turns it off");
+    CHECK(!aspect_vert_wanted(NULL) && !aspect_vert_wanted("") && !aspect_vert_wanted("0") && !aspect_vert_wanted("yes"), "Vert+ off by default");
+    CHECK(aspect_vert_wanted("1"), "TOTK_ASPECT_VERT=1 turns it on");
     CHECK(aspect_vert_factor(0) == 0 && aspect_vert_factor((float)(21.0 / 9)) == 0, "no Vert+ at 16:9 and wider");
     CHECK(near(aspect_vert_factor(1.6f), 10.0 / 9), "16:10: %f", aspect_vert_factor(1.6f));
     CHECK(near(aspect_vert_factor(4.0f / 3), 4.0 / 3), "4:3");

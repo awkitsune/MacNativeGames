@@ -1,5 +1,6 @@
 /* games/totk/runtime/aspect_math.h without the game: TOTK_ASPECT parsing, the Vert+ factor, the UI squeeze, the camera
-   site pattern on 1.4.3's own words, and (on Apple silicon) the stubs run for real against a fake projection. */
+   site patterns on sequences built here (no game code in the repository), and (on Apple silicon) the stubs run for real
+   against a fake projection. */
 #include "../games/totk/runtime/aspect_math.h"
 #include <math.h>
 #include <stdlib.h>
@@ -54,32 +55,77 @@ static void factors(void) {
     CHECK(near(vy / 1080 * 1600, 80) && near(vh / 1080 * 1600, 1440), "band %f %f", vy / 1080 * 1600, vh / 1080 * 1600);
 }
 
+/* A few A64 encodings: the camera and viewport sites below are built from them here, none of the game's code is used. */
+static uint32_t str_s(unsigned t, unsigned n, unsigned off) { return 0xbd000000u | (off / 4) << 10 | n << 5 | t; }
+static uint32_t ldr_s(unsigned t, unsigned n, unsigned off) { return 0xbd400000u | (off / 4) << 10 | n << 5 | t; }
+static uint32_t fmul_s(unsigned d, unsigned n, unsigned m) { return 0x1e200800u | m << 16 | n << 5 | d; }
+static uint32_t fdiv_s(unsigned d, unsigned n, unsigned m) { return 0x1e201800u | m << 16 | n << 5 | d; }
+static uint32_t fmov_s(unsigned d, unsigned n) { return 0x1e204000u | n << 5 | d; }
+static uint32_t bl(unsigned words) { return 0x94000000u | (words & 0x3ffffff); }
+#define NOP 0xd503201fu
+
+/* A camera site of the shape aspect_math.h looks for (sead's setFovy inlined, as in 1.4.3's camera update and setup):
+   the camera x<c>'s fovy loaded and halved, fovy and the sine, cosine and tangent of half of it stored into the
+   projection x<p> at +0xa0 .. +0xac, `gap` other words, the site loading the ratio, and its store at +0xb0 after
+   `after` other words. The words go to w[0..31]; the site's index is returned (always at least 16). */
+static int camera(uint32_t w[32], unsigned p, unsigned c, unsigned fovy, unsigned ratio, int gap, int after) {
+    int n = 0;
+    while (n < 3) w[n++] = NOP;
+    w[n++] = str_s(0, p, 0x9c);   /* a float store into the projection that is not the pattern */
+    w[n++] = ldr_s(0, c, fovy);
+    w[n++] = fmul_s(8, 0, 1);
+    w[n++] = str_s(0, p, 0xa0);
+    for (unsigned off = 0xa4; off <= 0xac; off += 4) { w[n++] = fmov_s(0, 8); w[n++] = bl(0x40); w[n++] = str_s(0, p, off); }
+    for (int i = 0; i < gap; i++) w[n++] = NOP;
+    int site = n;
+    w[n++] = ldr_s(0, c, ratio);
+    for (int i = 0; i < after; i++) w[n++] = NOP;
+    w[n++] = str_s(0, p, 0xb0);
+    while (n < 32) w[n++] = NOP;
+    return site;
+}
+
+/* A viewport site: width / height divided and stored at +0xb0, with no setFovy before it (and a load and fmul there
+   that are not a fovy's). */
+static int viewport(uint32_t w[32]) {
+    int n = 0;
+    while (n < 8) w[n++] = NOP;
+    w[n++] = ldr_s(2, 9, 0);
+    w[n++] = ldr_s(3, 10, 0);
+    w[n++] = fmul_s(4, 2, 3);
+    w[n++] = str_s(4, 0, 0x30);
+    while (n < 18) w[n++] = NOP;
+    int site = n;
+    w[n++] = fdiv_s(0, 0, 1);
+    w[n++] = str_s(0, 8, 0xb0);
+    while (n < 32) w[n++] = NOP;
+    return site;
+}
+
 static void sites(void) {
-    /* main+0x628c74 and +0xb43460 (1.4.3 camera update and setup), site-16 .. site+12 */
-    const uint32_t cam1[8] = {0x94963a03, 0xbd00ae80, 0x91051268, 0x39002295, 0xbd414260, 0x39002295, 0xbd00b280, 0xf9400108};
-    const uint32_t cam2[8] = {0x1e204100, 0x9481d007, 0xbd00aee0, 0x390022f8, 0xbd406ac0, 0x390022f8, 0xbd00b2e0, 0xf846c2c8};
-    /* main+0x1ff04f4, a viewport site: the ratio only, no setFovy before it */
-    const uint32_t vp[8] = {0x1e243800, 0x1e223821, 0x2d060804, 0x39002109, 0x1e211800, 0xbd00b100, 0xb9401a68, 0x52b00009};
+    uint32_t c1[32], c2[32], v[32];
+    int s1 = camera(c1, 20, 19, 0x13c, 0x140, 2, 1), s2 = camera(c2, 23, 22, 0x64, 0x68, 1, 0), sv = viewport(v);
+    const uint32_t *cam1 = c1 + s1 - 4, *cam2 = c2 + s2 - 4, *vp = v + sv - 4;     /* site-16 .. site+12 */
+    const uint32_t *f1 = c1 + s1 - 16, *f2 = c2 + s2 - 16, *f3 = v + sv - 16;      /* site-64 .. site-4 */
     CHECK(aspect_vert_reg(cam1) == 20, "camera update: x%d", aspect_vert_reg(cam1));
     CHECK(aspect_vert_reg(cam2) == 23, "camera setup: x%d", aspect_vert_reg(cam2));
     CHECK(aspect_vert_reg(vp) == -1, "viewport site has no Vert+");
     CHECK(aspect_site_ok(cam1[4]) && aspect_site_ok(cam2[4]) && aspect_site_ok(vp[4]), "site instructions");
+    CHECK(!aspect_site_ok(NOP) && !aspect_site_ok(str_s(0, 20, 0xb0)), "other instructions refused");
     uint32_t odd[8]; memcpy(odd, cam1, sizeof odd);
-    odd[6] = 0xbd00b140;   /* str s0, [x10, #0xb0]: the stub's own register */
-    odd[1] = 0xbd00ad40;   /* str s0, [x10, #0xac] */
+    CHECK(odd[1] == str_s(0, 20, 0xac) && odd[6] == str_s(0, 20, 0xb0), "camera update layout");
+    odd[6] = str_s(0, 10, 0xb0);   /* x10: the stub's own register */
+    odd[1] = str_s(0, 10, 0xac);
     CHECK(aspect_vert_reg(odd) == -1, "x10 refused");
-    memcpy(odd, cam1, sizeof odd); odd[4] = 0xbd414270; odd[6] = 0xbd00b290;   /* s16: a scratch register */
+    memcpy(odd, cam1, sizeof odd); odd[4] = ldr_s(16, 19, 0x140); odd[6] = str_s(16, 20, 0xb0);   /* s16: a scratch register */
     CHECK(aspect_vert_reg(odd) == -1, "s16 refused");
-    /* site-64 .. site-4: the camera's fovy load (ldr s0, [x19, #0x13c] / [x22, #0x64]), fmul, str s0, [x<p>, #0xa0] */
-    const uint32_t f1[16] = {0x39002295, 0xbd009e80, 0xbd413e60, 0x1e210808, 0xbd00a280, 0x1e204100, 0x949639fd, 0xbd00a680,
-                             0x1e204100, 0x949639ee, 0xbd00aa80, 0x1e204100, 0x94963a03, 0xbd00ae80, 0x91051268, 0x39002295};
-    const uint32_t f2[16] = {0xbd4062c0, 0x390022f8, 0xbd009ee0, 0xbd4066c0, 0x1e210808, 0xbd00a2e0, 0x1e204100, 0x9481d001,
-                             0xbd00a6e0, 0x1e204100, 0x9481cff2, 0xbd00aae0, 0x1e204100, 0x9481d007, 0xbd00aee0, 0x390022f8};
-    const uint32_t f3[16] = {0x927ef529, 0xbd400122, 0x927ef549, 0xbd400123, 0x52800029, 0x1e222000, 0x1e224c04, 0x1e204c40,
-                             0x1e232020, 0x1e234c22, 0x1e214c61, 0x2d070400, 0x1e243800, 0x1e223821, 0x2d060804, 0x39002109};
+    memcpy(odd, cam1, sizeof odd); odd[1] = NOP;
+    CHECK(aspect_vert_reg(odd) == -1, "no tangent store, no Vert+");
+    /* the camera's fovy load: ldr s<f>, [x<c>, #imm], fmul (half of it), str s<f>, [x<p>, #0xa0] */
     CHECK(aspect_fovy_at(f1, 20) == 2, "camera update fovy load: %d", aspect_fovy_at(f1, 20));
     CHECK(aspect_fovy_at(f2, 23) == 3, "camera setup fovy load: %d", aspect_fovy_at(f2, 23));
-    CHECK(aspect_fovy_at(f1, 23) == -1 && aspect_fovy_at(f3, 8) == -1, "no fovy load for another register or a viewport site");
+    CHECK(aspect_fovy_at(f1, 23) == -1 && aspect_fovy_at(f3, 8) == -1 && aspect_fovy_at(f3, 0) == -1,
+          "no fovy load for another register or a viewport site");
     uint32_t w[74];
     CHECK(aspect_stub(cam1[4], 0x1000, 0x1000 + (1 << 28), 0x4000, w) != NULL, "branch out of range refused");
     CHECK(aspect_vstub(f1[2], 0x1000, 0x2000, 0x1000 + (1ULL << 33), w) != NULL, "data page out of range refused");

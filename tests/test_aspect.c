@@ -1,6 +1,6 @@
-/* games/totk/runtime/aspect_math.h without the game: TOTK_ASPECT parsing, the Vert+ factor, the UI squeeze, the camera
-   site patterns on sequences built here (no game code in the repository), and (on Apple silicon) the stubs run for real
-   against a fake projection. */
+/* games/totk/runtime/aspect_math.h without the game: TOTK_ASPECT parsing, key 4's steps, the Vert+ factor, the UI
+   squeeze, the camera site patterns on sequences built here (no game code in the repository), and (on Apple silicon)
+   the stubs run for real against a fake projection. */
 #include "../games/totk/runtime/aspect_math.h"
 #include <math.h>
 #include <stdlib.h>
@@ -53,6 +53,29 @@ static void factors(void) {
     aspect_ui_squeeze(1.6, &ux, &uy);
     double vy = 540 + (0 - 540) / uy, vh = 1080 / uy;
     CHECK(near(vy / 1080 * 1600, 80) && near(vh / 1080 * 1600, 1440), "band %f %f", vy / 1080 * 1600, vh / 1080 * 1600);
+}
+
+static void steps(void) {
+    const double wide = ASPECT_WIDE, mac = 2560.0 / 1600;
+    CHECK(aspect_next_step(ASPECT_STEP_GAME, mac, wide) == ASPECT_STEP_FIT, "16:9 -> fit on a 16:10 window");
+    CHECK(aspect_next_step(ASPECT_STEP_FIT, mac, wide) == ASPECT_STEP_WIDE, "fit -> 21:9");
+    CHECK(aspect_next_step(ASPECT_STEP_WIDE, mac, wide) == ASPECT_STEP_GAME, "21:9 -> 16:9");
+    CHECK(aspect_next_step(ASPECT_STEP_GAME, 1920.0 / 1080, wide) == ASPECT_STEP_WIDE, "fit skipped on a 1920x1080 window");
+    CHECK(aspect_next_step(ASPECT_STEP_GAME, 1920.0 / 1088, wide) == ASPECT_STEP_WIDE, "fit skipped within 1%% of 16:9");
+    CHECK(aspect_next_step(ASPECT_STEP_GAME, 2520.0 / 1080, wide) == ASPECT_STEP_WIDE, "fit skipped on a 2520x1080 window");
+    CHECK(aspect_next_step(ASPECT_STEP_GAME, 3440.0 / 1440, wide) == ASPECT_STEP_FIT, "3440x1440 is 2.39, not 21:9");
+    CHECK(aspect_next_step(ASPECT_STEP_GAME, 0, wide) == ASPECT_STEP_WIDE, "no window shape yet: fit skipped");
+    CHECK(aspect_next_step(ASPECT_STEP_GAME, mac, 1.6) == ASPECT_STEP_WIDE, "TOTK_ASPECT=16:10 on a 16:10 window: fit skipped");
+    CHECK(aspect_next_step(ASPECT_STEP_GAME, mac, 32.0 / 9) == ASPECT_STEP_FIT, "TOTK_ASPECT=32:9 on a 16:10 window");
+    CHECK(aspect_step_ratio(ASPECT_STEP_GAME, mac, wide) == 0, "16:9 step");
+    CHECK(aspect_step_ratio(ASPECT_STEP_FIT, mac, wide) == mac, "fit step");
+    CHECK(aspect_step_ratio(ASPECT_STEP_WIDE, mac, wide) == wide, "21:9 step");
+    CHECK(aspect_effective(aspect_step_ratio(ASPECT_STEP_FIT, 1920.0 / 1080, wide)) == 0, "fit on a 16:9 window puts in nothing");
+    int step = ASPECT_STEP_GAME;
+    for (int i = 0; i < 3; i++) step = aspect_next_step(step, mac, wide);
+    CHECK(step == ASPECT_STEP_GAME, "three presses come back to 16:9 on a 16:10 window");
+    for (int i = 0; i < 2; i++) step = aspect_next_step(step, 1920.0 / 1080, wide);
+    CHECK(step == ASPECT_STEP_GAME, "two on a 16:9 window");
 }
 
 /* A few A64 encodings: the camera and viewport sites below are built from them here, none of the game's code is used. */
@@ -204,6 +227,7 @@ static void run(void) {
 int main(void) {
     parsing();
     factors();
+    steps();
     sites();
 #if defined(__aarch64__) && defined(__APPLE__)
     run();

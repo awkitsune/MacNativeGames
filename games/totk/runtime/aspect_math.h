@@ -33,10 +33,30 @@ static inline double aspect_parse(const char *e) {
     return a >= 0.5 && a <= 8 ? a : ASPECT_BAD;
 }
 
+/* Is ratio a within 1% of b. */
+static inline int aspect_near(double a, double b) { return a > 0 && b > 0 && a / b > 0.99 && a / b < 1.01; }
+
 /* The ratio to put in for a wanted one: 0 (the game's own, no stretch) within 1% of 16:9 or outside 0.5..8. */
 static inline float aspect_effective(double a) {
-    if (!(a >= 0.5 && a <= 8) || (a / ASPECT_GAME > 0.99 && a / ASPECT_GAME < 1.01)) return 0;
+    if (!(a >= 0.5 && a <= 8) || aspect_near(a, ASPECT_GAME)) return 0;
     return (float)a;
+}
+
+/* Key 4's steps: 16:9 -> fit to the window / display -> wide -> 16:9. wide is 21:9, or TOTK_ASPECT's ratio when set. */
+#define ASPECT_WIDE (21.0 / 9.0)
+enum { ASPECT_STEP_GAME, ASPECT_STEP_FIT, ASPECT_STEP_WIDE };
+
+/* The step after `step` for a window of shape view: fitting is skipped when it would show the same as 16:9 or wide
+   (the window within 1% of either, or no window shape yet). */
+static inline int aspect_next_step(int step, double view, double wide) {
+    if (step == ASPECT_STEP_GAME)
+        return !(view > 0) || aspect_near(view, ASPECT_GAME) || aspect_near(view, wide) ? ASPECT_STEP_WIDE : ASPECT_STEP_FIT;
+    return step == ASPECT_STEP_FIT ? ASPECT_STEP_WIDE : ASPECT_STEP_GAME;
+}
+
+/* The ratio a step wants (0 = the game's own); aspect_effective turns it into the one put in. */
+static inline double aspect_step_ratio(int step, double view, double wide) {
+    return step == ASPECT_STEP_FIT ? view : step == ASPECT_STEP_WIDE ? wide : 0;
 }
 
 /* Vert+ is opt-in: TOTK_ASPECT_VERT=1 only (otherwise the vertical view is kept and a little less is seen at the sides). */
